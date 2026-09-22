@@ -12,6 +12,7 @@ import Razorpay from "razorpay";
 import crypto from "crypto";
 import Order from "./order.js";
 import Workout from "./workout.js";
+import askAI from "./ai.js";
 dotenv.config();
 
 const app = express();
@@ -747,34 +748,11 @@ app.get("/workouts/user/:userId", async (req, res) => {
       workout,
     });
   } catch (error) {
-    console.error("GET WORKOUT ERROR:", error);
+    console.error("GET USER WORKOUT ERROR:", error);
 
     res.status(500).json({
       success: false,
       message: "Failed to fetch workout",
-      error: error.message,
-    });
-  }
-});
-
-app.get("/workouts/user/:userId", async (req, res) => {
-  try {
-    const { userId } = req.params;
-
-    const workouts = await Workout.find({
-      userId,
-    }).sort({ createdAt: -1 });
-
-    res.json({
-      success: true,
-      workouts,
-    });
-  } catch (error) {
-    console.error("GET USER WORKOUTS ERROR:", error);
-
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch workouts",
       error: error.message,
     });
   }
@@ -825,6 +803,182 @@ app.delete("/workouts/:workoutId/exercises/:exerciseId", async (req, res) => {
     });
   }
 });
+
+app.post("/ai/workout-plan", async (req, res) => {
+  try {
+    const { userId } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: "User ID is required",
+      });
+    }
+
+    const user = await User.findById(userId).select(
+      "name age gender height weight goal experience workoutDays equipment activityLevel"
+    );
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    const systemPrompt = `
+You are FitAI Workout Coach.
+
+Create practical and safe workout plans based on the user's profile.
+
+Do not claim to diagnose or treat medical conditions.
+
+Keep the workout realistic for the user's experience, available equipment, workout days, goal, age, height and weight.
+
+Give clear exercises, sets, reps, rest time and weekly structure.
+
+If the user information is incomplete, make reasonable general assumptions and clearly mention them.
+`;
+
+    const userPrompt = `
+Create a personalized weekly workout plan for this FitAI user.
+
+User Profile:
+Name: ${user.name}
+Age: ${user.age || "Not provided"}
+Gender: ${user.gender || "Not provided"}
+Height: ${user.height || "Not provided"} cm
+Weight: ${user.weight || "Not provided"} kg
+Goal: ${user.goal || "Not provided"}
+Experience: ${user.experience || "Not provided"}
+Workout Days: ${user.workoutDays || "Not provided"}
+Equipment: ${user.equipment || "Not provided"}
+Activity Level: ${user.activityLevel || "Not provided"}
+
+Return:
+1. Weekly schedule
+2. Exercises for each workout day
+3. Sets and reps
+4. Rest time
+5. Short workout tips
+`;
+
+    const answer = await askAI(systemPrompt, userPrompt);
+
+    res.json({
+      success: true,
+      message: "Workout plan generated successfully",
+      plan: answer,
+    });
+  } catch (error) {
+    console.error("AI WORKOUT ERROR:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to generate workout plan",
+      error: error.message,
+    });
+  }
+});
+
+app.post("/ai/product-advice", async (req, res) => {
+  try {
+    const { userId, question } = req.body;
+
+    if (!userId || !question) {
+      return res.status(400).json({
+        success: false,
+        message: "User ID and question are required",
+      });
+    }
+
+    const user = await User.findById(userId).select(
+      "name age gender height weight goal activityLevel dietPreference"
+    );
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    const products = await Product.find({
+      stock: { $gt: 0 },
+    }).select(
+      "name category price oldPrice description stock"
+    );
+
+    if (products.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "No products available",
+      });
+    }
+
+    const productData = products
+      .map(
+        (product) => `
+Product Name: ${product.name}
+Category: ${product.category}
+Price: ₹${product.price}
+Description: ${product.description || "Not available"}
+Stock: ${product.stock}
+`
+      )
+      .join("\n");
+
+    const systemPrompt = `
+You are FitAI Product Advisor.
+
+Help users understand which available FitAI products may be relevant to their fitness goal.
+
+Only discuss products provided in the product data.
+
+Do not invent products, prices, features or stock information.
+
+Do not pressure the user to buy anything.
+
+Explain why a product may or may not be relevant.
+
+For supplements, avoid making medical claims and recommend consulting a qualified professional when personal medical conditions or medication could affect the decision.
+`;
+
+    const userPrompt = `
+User Profile:
+Goal: ${user.goal || "Not provided"}
+Age: ${user.age || "Not provided"}
+Weight: ${user.weight || "Not provided"} kg
+Activity Level: ${user.activityLevel || "Not provided"}
+Diet Preference: ${user.dietPreference || "Not provided"}
+
+User Question:
+${question}
+
+Available FitAI Products:
+${productData}
+
+Give a helpful comparison or recommendation based only on the available products.
+`;
+
+    const answer = await askAI(systemPrompt, userPrompt);
+
+    res.json({
+      success: true,
+      message: "Product advice generated successfully",
+      advice: answer,
+    });
+  } catch (error) {
+    console.error("AI PRODUCT ERROR:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to generate product advice",
+      error: error.message,
+    });
+  }
+});
+
 
 app.listen(PORT, () => {
   console.log(
